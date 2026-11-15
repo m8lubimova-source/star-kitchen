@@ -3718,10 +3718,11 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       '<div class="row g8"><button type="button" class="btn primary" data-act="sf-save" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Сохранить</span></button>' +
       '<button type="button" class="btn" data-act="sf-reset" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Как в плане</span></button></div></div>';
   }
-  function row(t, k, it) {
+  function row(t, k, it, showStore) {
     var st = Shopping.status(t, k, it.id), fc = Shopping.fact(t, k, it.id), key = t.id + '|' + k + '|' + it.id;
     var cap = fc && fc.g != null ? 'куплено ' + Shopping.weight(fc.g) + ' · по плану ' + Shopping.itemCap(it) : Shopping.itemCap(it);
     if (fc && fc.store) cap += ' · ' + Shopping.storeName(fc.store);
+    else if (showStore) cap += ' · ' + Shopping.storeName(t.store);
     var price = fc && fc.price != null ? Shopping.money(fc.price) : Shopping.money(it.cost);
     return '<div class="srw" style="display:flex;align-items:center;gap:4px"><div style="flex:1;min-width:0">' + rowBtn(t, k, it, st, cap, price, !!(fc && fc.price != null)) + '</div>' +
       '<button type="button" class="chip tiny" data-act="sf-open" data-key="' + esc(key) + '" aria-label="Изменить граммы и цену: ' + esc(Shopping.itemName(it)) + '">' + (fc ? 'изм. ✎' : '✎') + '</button></div>' +
@@ -3745,6 +3746,16 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       out += '<section class="card g4"><div class="label">' + esc(c[1]) + '</div>' + g.items.map(function (it) { return row(t, k, it); }).join('') + '</section>';
     });
     return out;
+  }
+
+  /* один общий список по категориям; магазин — только в подписи строки, фильтр — чипами сверху */
+  function listBlock(trips, k, showStore) {
+    var cats = {};
+    trips.forEach(function (t) { t.items.forEach(function (it) { var c = catOf(it.id); (cats[c[0]] = cats[c[0]] || []).push({ t: t, it: it }); }); });
+    return CATS.map(function (c) {
+      var g = cats[c[0]]; if (!g) return '';
+      return '<section class="card g4"><div class="label">' + esc(c[1]) + '</div>' + g.map(function (x) { return row(x.t, k, x.it, showStore); }).join('') + '</section>';
+    }).join('');
   }
 
   App.screen('shop', {
@@ -3797,7 +3808,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
         '<div class="small" style="font-size:12px">' + esc(cap) + '</div></section>' +
         chips +
         '<div class="legend"><span>' + Ui.icon('check', 14) + 'куплено</span><span>' + Ui.icon('box', 14) + 'уже есть дома</span><span style="margin-left:auto">осталось: ' + left + '</span></div>' +
-        shown.map(function (t) { return tripBlock(t, sel.k); }).join('') +
+        listBlock(shown, sel.k, sel.store === 'all' && stores.length > 1) +
         Ui.btn('Скопировать список для доставки', { primary: true, act: 'shop-copy', icon: null }).replace('<span>', CART + '<span>') +
         (canCam ? Ui.btn('Сфотографировать чек', { act: 'rcpt-pick' }).replace('<span>', Ui.art('cameraM', 22, 16.5, '') + '<span>') : '') +
         (rcpts.length || Shopping.receipts().length ? '<a class="textbtn" href="#receipt">Мои чеки (' + Shopping.receipts().length + ')</a>' : '') +
