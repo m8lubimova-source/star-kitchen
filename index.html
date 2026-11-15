@@ -3637,6 +3637,31 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       if (Shopping.status(x.trip, x.k, x.id) === 'none') Shopping.setStatus(x.trip, x.k, x.id, 'bought'); }
     editing = null; App.toast('Сохранила', { icon: 'check' }); App.rerender();
   });
+  /* быстрый ответ «где купила»: один тап сохраняет магазин (повторный тап снимает) и отмечает куплено */
+  App.on('sf-store', function (el) {
+    var x = sfTarget(el); if (!x) return; var s = el.getAttribute('data-s'), f = Object.assign({}, Shopping.fact(x.trip, x.k, x.id) || {});
+    var inputG = document.getElementById('sf-g'), inputP = document.getElementById('sf-p');
+    if (inputG && num2(inputG.value) != null) f.g = Math.round(num2(inputG.value));
+    if (inputP && num2(inputP.value) != null) f.price = Math.round(num2(inputP.value) * 100) / 100;
+    if (f.store === s) delete f.store; else f.store = s;
+    Shopping.setFact(x.trip, x.k, x.id, Object.keys(f).length ? f : null);
+    if (f.store && Shopping.status(x.trip, x.k, x.id) === 'none') Shopping.setStatus(x.trip, x.k, x.id, 'bought');
+    App.rerender();
+  });
+  /* своё место покупки: запоминаем в общем списке, дальше оно доступно быстрым тапом у любого продукта */
+  App.on('sf-own', function (el) {
+    var x = sfTarget(el), inp = document.getElementById('sf-own'); if (!x || !inp) return;
+    var name = String(inp.value || '').replace(/\s+/g, ' ').trim().slice(0, 30); if (!name) { App.toast('Напиши название места'); return; }
+    var known = Object.keys(Data.plan.stores || {}).filter(function (s) { return (Data.plan.stores[s].name || '').toLowerCase() === name.toLowerCase(); })[0];
+    var val = known || name;
+    if (!known) Store.mutate('misc', 'sources', function (d) { d.list = d.list || []; if (d.list.indexOf(name) < 0) d.list.push(name); });
+    var gi = document.getElementById('sf-g'), pi = document.getElementById('sf-p'), f = Object.assign({}, Shopping.fact(x.trip, x.k, x.id) || {});
+    if (gi && num2(gi.value) != null) f.g = Math.round(num2(gi.value));
+    if (pi && num2(pi.value) != null) f.price = Math.round(num2(pi.value) * 100) / 100;
+    f.store = val; Shopping.setFact(x.trip, x.k, x.id, f);
+    if (Shopping.status(x.trip, x.k, x.id) === 'none') Shopping.setStatus(x.trip, x.k, x.id, 'bought');
+    App.rerender();
+  });
   App.on('sf-reset', function (el) { var x = sfTarget(el); if (!x) return; Shopping.setFact(x.trip, x.k, x.id, null); editing = null; App.rerender(); });
   App.on('shop-store', function (el) { sel.store = el.getAttribute('data-s'); App.rerender(); });
   App.on('shop-cycle', function (el) {
@@ -3679,7 +3704,15 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
   function num2(v) { v = String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.'); var n = parseFloat(v); return isNaN(n) || n <= 0 ? null : n; }
   function editForm(t, k, it) {
     var f = Shopping.fact(t, k, it.id) || {}, kg = it.sold_by === 'kg' || !it.packs;
-    return '<div class="card g6 sfx" style="margin:0 0 6px 34px"><div class="cap">Что купила на самом деле</div><div class="row g8">' +
+    var ST = Data.plan.stores || {}, ids = Object.keys(ST).filter(function (s) { return ['any', 'bakery', 'bulk', 'home'].indexOf(s) < 0; }), cur = f.store || null;
+    var where = '<div class="cap">Где купила</div><div class="chips" role="group" aria-label="Где купила">' + ids.map(function (s) {
+      return '<button type="button" class="chip tiny' + (cur === s ? ' on' : '') + '" data-act="sf-store" data-s="' + esc(s) + '" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '">' + esc(ST[s].name || s) + '</button>';
+    }).join('') + (Store.get('misc', 'sources').list || []).map(function (s) {
+      return '<button type="button" class="chip tiny' + (cur === s ? ' on' : '') + '" data-act="sf-store" data-s="' + esc(s) + '" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '">' + esc(s) + '</button>';
+    }).join('') + '</div>' +
+      '<div class="row g8"><input class="m-input grow" id="sf-own" maxlength="30" placeholder="Своё место: например, ВкусВилл" aria-label="Своё место покупки">' +
+      '<button type="button" class="btn" data-act="sf-own" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Добавить</span></button></div>';
+    return '<div class="card g6 sfx" style="margin:0 0 6px 34px">' + where + '<div class="cap">Что купила на самом деле</div><div class="row g8">' +
       '<label class="col g2 grow"><span class="cap">Граммы</span><input class="m-input" inputmode="decimal" id="sf-g" placeholder="' + Math.round(it.g) + '" value="' + (f.g != null ? f.g : '') + '" aria-label="Сколько граммов купила"></label>' +
       '<label class="col g2 grow"><span class="cap">Цена, ₽</span><input class="m-input" inputmode="decimal" id="sf-p" placeholder="' + Math.round(it.cost) + '" value="' + (f.price != null ? f.price : '') + '" aria-label="За сколько ₽ купила"></label></div>' +
       '<div class="row g8"><button type="button" class="btn primary" data-act="sf-save" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Сохранить</span></button>' +
@@ -3688,6 +3721,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
   function row(t, k, it) {
     var st = Shopping.status(t, k, it.id), fc = Shopping.fact(t, k, it.id), key = t.id + '|' + k + '|' + it.id;
     var cap = fc && fc.g != null ? 'куплено ' + Shopping.weight(fc.g) + ' · по плану ' + Shopping.itemCap(it) : Shopping.itemCap(it);
+    if (fc && fc.store) cap += ' · ' + Shopping.storeName(fc.store);
     var price = fc && fc.price != null ? Shopping.money(fc.price) : Shopping.money(it.cost);
     return '<div class="srw" style="display:flex;align-items:center;gap:4px"><div style="flex:1;min-width:0">' + rowBtn(t, k, it, st, cap, price, !!(fc && fc.price != null)) + '</div>' +
       '<button type="button" class="chip tiny" data-act="sf-open" data-key="' + esc(key) + '" aria-label="Изменить граммы и цену: ' + esc(Shopping.itemName(it)) + '">' + (fc ? 'изм. ✎' : '✎') + '</button></div>' +
