@@ -2624,6 +2624,15 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     return Ui.seg([{ v: 'tea', label: 'Чай', art: v === 'tea' ? 'teaM' : null }, { v: 'coffee', label: 'Кофе +' + App.cfg.COFFEE_KCAL, art: v === 'coffee' ? 'coffeeM' : null }], v, 'drink');
   }
 
+  /* Действия приёма (не прячем): «Нет сил», «Заменить», «Пропустить». Только для ещё не отмеченных приёмов. */
+  function acts(m) {
+    if (m.status && m.status !== 'open') return '';
+    return '<div class="chips mact" style="margin:2px 0 8px 2px"><a class="chip" href="' + App.href('tired', m.key) + '">' + Ui.icon('bolt', 12) + 'Нет сил</a>' +
+      '<a class="chip" href="' + App.href('replace', m.key) + '">Заменить</a>' +
+      '<button type="button" class="chip" data-act="meal-skip" data-key="' + esc(m.key) + '">Пропустить</button></div>';
+  }
+  function mealBlock(m, o) { return Ui.mealRow(m, o) + acts(m); }
+
   function nowCard(I) {
     var m = I.now, T = I.T; if (!m) return '';
     var t = D.hm(m.time.her), lab = T.min < t - 30 ? 'Дальше' : T.min > t + 150 ? 'Ждёт' : 'Сейчас';
@@ -2635,7 +2644,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       '<div class="chips"><span class="chip meta" style="padding:6px 12px;font-size:13px">' + Ui.art('boxM', 18, 13.5, '') + esc(Data.mealHint(m)) + '</span>' + (m.packHim ? '<span class="chip meta" style="padding:6px 12px;font-size:13px">' + Ui.icon('box', 14, 'box') + ' у Сережи — контейнер</span>' : '') + '</div>' +
       Ui.tiles(m.g.her, m.hasHim ? m.g.him : 0, !m.hasHim) +
       Ui.btn('Начать', { primary: true, icon: 'fire', iconCls: 'keep', href: App.href('cook', sid) }) +
-      '<button type="button" class="textbtn" style="min-height:36px" data-act="meal-skip" data-key="' + esc(m.key) + '">Пропустить этот приём</button></section>';
+      acts(m) + '</section>';
   }
 
   function levelRow() {
@@ -2692,7 +2701,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       '<div class="row g10" style="min-height:36px">' + Ui.art('coffeeM', 20, 12.5, '') + '<span class="grow" style="font-size:13px;font-weight:700">Чай или кофе?</span>' + drinkSeg(T.date) + '</div></section>' +
       sundayCard(I) +
       nowCard(I) +
-      '<section class="card g4" style="padding:14px" aria-label="Остальное за день">' + rest.map(function (m) { return Ui.mealRow(m, { plain: true }); }).join('') + '</section>' +
+      '<section class="card g4" style="padding:14px" aria-label="Остальное за день">' + rest.map(function (m) { return mealBlock(m, { plain: true }); }).join('') + '</section>' +
       tipCard(I) + '</main>';
   }
 
@@ -2709,7 +2718,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       '<a class="chip" href="#tired">' + Ui.icon('bolt', 12) + 'Нет сил</a></div>' +
       sundayCard(I) +
       nowCard(I) +
-      '<section class="card meallist" aria-label="Приёмы пищи">' + others.map(function (m) { return Ui.mealRow(m); }).join('') + '</section>' +
+      '<section class="card meallist" aria-label="Приёмы пищи">' + others.map(function (m) { return mealBlock(m); }).join('') + '</section>' +
       tipCard(I) +
       (showPack ? evCard(P, T.date) : '') +
       '<div class="row g6" style="padding:0 2px">' + Ui.icon('heart', 14) + '<span class="cap bold t2">' + esc(Data.balanceText()) + '</span></div></main>';
@@ -2721,7 +2730,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     var rows = I.meals.slice().sort(function (a, b) { return Data.SLOTS.indexOf(a.slot) - Data.SLOTS.indexOf(b.slot); }).map(function (m) {
       var trail = m.status === 'done' ? Ui.icon('check', 21) : '<span class="cap">' + { skipped: 'пропущено', moved: 'перенесено', open: 'не отмечено' }[m.status] + '</span>';
       if (m.replaced && m.status === 'done') trail = '<span class="cap">заменено</span>' + Ui.icon('check', 21);
-      return '<a class="mrow sum" href="' + App.href(m.status === 'open' ? 'dish' : 'done', m.key) + '"><span class="tt grow" style="font-size:14px;font-weight:700">' + esc(m.label) + '</span>' + trail + '</a>';
+      return '<a class="mrow sum" href="' + App.href(m.status === 'open' ? 'dish' : 'done', m.key) + '"><span class="tt grow" style="font-size:14px;font-weight:700">' + esc(m.label) + '</span>' + trail + '</a>' + acts(m);
     }).join('');
     var tomB = Data.meal(nd, 'breakfast'), tomD = Data.meal(nd, 'dinner'), tp = Data.packing(nd);
     var parts = ['Завтрак — ' + Data.breakfastHint(nd)];
@@ -3049,13 +3058,18 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
 /* tired.js — «Нет сил» (#tired): шторка с быстрыми вариантами поверх настоящего экрана «Сегодня». */
 (function () {
   'use strict';
-  var esc = App.esc, sel = 0;
+  var esc = App.esc, sel = 0, cur = null;
+  /* «Нет сил» работает для любого открытого приёма (#tired-<date>.<slot>); без аргумента — для ближайшего */
+  function target(I, arg) {
+    var hit = arg ? I.meals.filter(function (x) { return x.key === arg && (!x.status || x.status === 'open'); })[0] : null;
+    return hit || I.now;
+  }
 
   App.screen('tired', {
     tab: null, title: 'Нет сил',
     onEscape: function () { App.back('#today'); },
-    render: function () {
-      var I = TodayScreen.info(), m = I.now;
+    render: function (arg) {
+      var I = TodayScreen.info(), m = target(I, arg); cur = arg || null;
       var under = '<div class="under" aria-hidden="true">' + TodayScreen.body({ phase: 'day' }).replace(/<nav class="tabbar"[\s\S]*$/, '') + '</div>';
       var inner;
       if (!m) {
@@ -3081,7 +3095,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
 
   App.on('tr-pick', function (el) { sel = +el.getAttribute('data-i'); App.rerender(); });
   App.on('tr-choose', function () {
-    var I = TodayScreen.info(), m = I.now; if (!m) return;
+    var I = TodayScreen.info(), m = target(I, cur); if (!m) return;
     var o = Data.quickOptions(m)[sel]; if (!o) return;
     if (o.type === 'postpone') { Data.setOverride(m.date, m.slot, { type: 'postpone', at: Date.now() }); App.toast('Перенесла на завтра'); }
     else { Data.setOverride(m.date, m.slot, { type: 'replace', d: o.c.d, slot: o.c.slot, quick: true, at: Date.now() }); App.toast('Заменила на быстрый вариант'); }
