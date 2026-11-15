@@ -3557,6 +3557,11 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     setStatus: function (trip, k, id, st) {
       Store.mutate('shop', Shopping.docId(trip, k), function (d) { d.items = d.items || {}; if (st === 'none') delete d.items[id]; else d.items[id] = st; });
     },
+    /* факт покупки: сколько грамм и за сколько ₽ на самом деле (правит Маша) */
+    fact: function (trip, k, id) { return ((Shopping.doc(trip, k).fact || {})[id]) || null; },
+    setFact: function (trip, k, id, f) {
+      Store.mutate('shop', Shopping.docId(trip, k), function (d) { d.fact = d.fact || {}; if (!f) delete d.fact[id]; else d.fact[id] = f; });
+    },
     findTrip: function (tripId) {
       var W = Shopping.weeks();
       for (var i = 0; i < W.length; i++) for (var j = 0; j < W[i].trips.length; j++) if (W[i].trips[j].id === tripId) return { week: W[i].week, trip: W[i].trips[j] };
@@ -3623,6 +3628,15 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
   }
 
   App.on('shop-week', function (el) { sel.week = +el.getAttribute('data-w'); sel.kind = el.getAttribute('data-kind') || 'big'; sel.store = 'all'; App.rerender(); });
+  App.on('sf-open', function (el) { var k = el.getAttribute('data-key'); editing = editing === k ? null : k; App.rerender(); });
+  function sfTarget(el) { var f = Shopping.findTrip(el.getAttribute('data-trip')); return f ? { trip: f.trip, k: +el.getAttribute('data-k'), id: el.getAttribute('data-id') } : null; }
+  App.on('sf-save', function (el) {
+    var x = sfTarget(el); if (!x) return; var g = num2((document.getElementById('sf-g') || {}).value), p = num2((document.getElementById('sf-p') || {}).value);
+    if (g == null && p == null) { Shopping.setFact(x.trip, x.k, x.id, null); } else { var f = {}; if (g != null) f.g = Math.round(g); if (p != null) f.price = Math.round(p * 100) / 100; Shopping.setFact(x.trip, x.k, x.id, f);
+      if (Shopping.status(x.trip, x.k, x.id) === 'none') Shopping.setStatus(x.trip, x.k, x.id, 'bought'); }
+    editing = null; App.toast('Сохранила', { icon: 'check' }); App.rerender();
+  });
+  App.on('sf-reset', function (el) { var x = sfTarget(el); if (!x) return; Shopping.setFact(x.trip, x.k, x.id, null); editing = null; App.rerender(); });
   App.on('shop-store', function (el) { sel.store = el.getAttribute('data-s'); App.rerender(); });
   App.on('shop-cycle', function (el) {
     var f = Shopping.findTrip(el.getAttribute('data-trip')); if (!f) return;
@@ -3660,12 +3674,29 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
 
   var CART = '<svg class="ic keep" width="16" height="13" viewBox="0 0 16 13" aria-hidden="true"><path d="M1 1h2.4l1.5 7h7.2l1.4-5H4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><circle cx="6" cy="11.3" r="1.3" fill="currentColor"/><circle cx="11.5" cy="11.3" r="1.3" fill="currentColor"/></svg>';
 
+  var editing = null;   // 'tripId|k|id' — открыта форма «сколько купила»
+  function num2(v) { v = String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.'); var n = parseFloat(v); return isNaN(n) || n <= 0 ? null : n; }
+  function editForm(t, k, it) {
+    var f = Shopping.fact(t, k, it.id) || {}, kg = it.sold_by === 'kg' || !it.packs;
+    return '<div class="card g6 sfx" style="margin:0 0 6px 34px"><div class="cap">Что купила на самом деле</div><div class="row g8">' +
+      '<label class="col g2 grow"><span class="cap">Граммы</span><input class="m-input" inputmode="decimal" id="sf-g" placeholder="' + Math.round(it.g) + '" value="' + (f.g != null ? f.g : '') + '" aria-label="Сколько граммов купила"></label>' +
+      '<label class="col g2 grow"><span class="cap">Цена, ₽</span><input class="m-input" inputmode="decimal" id="sf-p" placeholder="' + Math.round(it.cost) + '" value="' + (f.price != null ? f.price : '') + '" aria-label="За сколько ₽ купила"></label></div>' +
+      '<div class="row g8"><button type="button" class="btn primary" data-act="sf-save" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Сохранить</span></button>' +
+      '<button type="button" class="btn" data-act="sf-reset" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '"><span>Как в плане</span></button></div></div>';
+  }
   function row(t, k, it) {
-    var st = Shopping.status(t, k, it.id);
+    var st = Shopping.status(t, k, it.id), fc = Shopping.fact(t, k, it.id), key = t.id + '|' + k + '|' + it.id;
+    var cap = fc && fc.g != null ? 'куплено ' + Shopping.weight(fc.g) + ' · по плану ' + Shopping.itemCap(it) : Shopping.itemCap(it);
+    var price = fc && fc.price != null ? Shopping.money(fc.price) : Shopping.money(it.cost);
+    return '<div class="srw" style="display:flex;align-items:center;gap:4px"><div style="flex:1;min-width:0">' + rowBtn(t, k, it, st, cap, price, !!(fc && fc.price != null)) + '</div>' +
+      '<button type="button" class="chip tiny" data-act="sf-open" data-key="' + esc(key) + '" aria-label="Изменить граммы и цену: ' + esc(Shopping.itemName(it)) + '">' + (fc ? 'изм. ✎' : '✎') + '</button></div>' +
+      (editing === key ? editForm(t, k, it) : '');
+  }
+  function rowBtn(t, k, it, st, cap, price, isFact) {
     return '<button type="button" class="srow ' + st + '" data-act="shop-cycle" data-trip="' + esc(t.id) + '" data-k="' + k + '" data-id="' + esc(it.id) + '" role="checkbox" aria-checked="' + (st === 'bought' ? 'true' : st === 'home' ? 'mixed' : 'false') + '" aria-label="' + esc(Shopping.itemName(it)) + (st === 'home' ? ', уже есть дома' : st === 'bought' ? ', куплено' : '') + '">' +
       '<span class="zc' + (st === 'bought' ? ' on' : st === 'home' ? ' home' : '') + '">' + (st === 'bought' ? Ui.icon('check', 14) : st === 'home' ? Ui.icon('box', 14) : '') + '</span>' +
-      '<span class="tx"><span class="tt">' + esc(Shopping.itemName(it)) + '</span><span class="cp">' + esc(Shopping.itemCap(it)) + '</span></span>' +
-      '<span class="pr num">' + esc(Shopping.money(it.cost)) + '</span></button>';
+      '<span class="tx"><span class="tt">' + esc(Shopping.itemName(it)) + '</span><span class="cp">' + esc(cap) + '</span></span>' +
+      '<span class="pr num"' + (isFact ? ' style="color:var(--mint)"' : '') + '>' + esc(price) + '</span></button>';
   }
 
   function tripBlock(t, k) {
@@ -3694,7 +3725,8 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
       var tripCost = 0; trips.forEach(function (t) { tripCost += t.cost || 0; });
       var monthCost = 0; weeks.forEach(function (w) { monthCost += w.cost || 0; });
       var parsed = rcpts.filter(function (r) { return r.factTotal != null; });
-      var spent = parsed.length ? parsed.reduce(function (a, r) { return a + (+r.factTotal || 0); }, 0) : monthCost;
+      var marks = 0; weeks.forEach(function (w) { w.trips.forEach(function (tr) { tr.items.forEach(function (it) { var fc = Shopping.fact(tr, sel.k, it.id), s = Shopping.status(tr, sel.k, it.id); if (fc && fc.price != null) marks += fc.price; else if (s === 'bought') marks += it.cost || 0; }); }); });
+      var spent = parsed.length ? parsed.reduce(function (a, r) { return a + (+r.factTotal || 0); }, 0) : Math.round(marks);
       var limit = (Data.plan.budget || {}).limit || monthCost || 1, pct = Math.min(100, Math.round(spent / limit * 100));
       var cap = parsed.length ? 'Факт по чекам: ' + parsed.length + ' · план месяца ' + Shopping.money(monthCost) : 'Этот закуп по ценам магазинов: ' + Shopping.money(tripCost) + ' · факт — по твоим чекам';
       // фильтр по магазинам (рынок — отдельный экран)
