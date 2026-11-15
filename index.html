@@ -3616,8 +3616,8 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     var out = [];
     Shopping.weeks().forEach(function (w) {
       var big = w.trips.filter(isBig), small = w.trips.filter(function (t) { return !isBig(t); });
-      if (big.length) out.push({ week: w.week, kind: 'big', label: 'Большой закуп · ' + D.dm(Shopping.tripDate(big[0], sel.k || 0)) });
-      if (small.length) out.push({ week: w.week, kind: 'small', label: 'Докупки · нед. ' + w.week });
+      if (big.length) out.push({ week: w.week, kind: 'big', label: 'Недели ' + w.week + ' • ' + (w.week + 1) });
+      if (small.length) out.push({ week: w.week, kind: 'small', label: 'Неделя ' + w.week });
     });
     return out;
   }
@@ -3708,7 +3708,14 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
           var lab = nm + (kind === 'delivery' && firstDeliv ? ' · доставка' : ''); if (kind === 'delivery') firstDeliv = false;
           return '<button type="button" class="chip' + (sel.store === s ? ' on' : '') + '" data-act="shop-store" data-s="' + esc(s) + '">' + esc(lab) + '</button>';
         }).join('') + '</div>';
-      var wk = '<div class="chips scroll" role="group" aria-label="Закупы">' + tabsList().map(function (x) {
+      function tabRow(kind, title) {
+        var list = tabsList().filter(function (x) { return x.kind === kind; });
+        return '<div class="col g4"><div class="cap bold" style="font-size:12px">' + title + '</div><div class="chips scroll" role="group" aria-label="' + title + '">' + list.map(function (x) {
+          return '<button type="button" class="chip tiny' + (x.week === W.week && x.kind === sel.kind ? ' on' : '') + '" data-act="shop-week" data-w="' + x.week + '" data-kind="' + x.kind + '">' + esc(x.label) + '</button>';
+        }).join('') + '</div></div>';
+      }
+      var wk = tabRow('big', 'Большой закуп (раз в 2 недели)') + tabRow('small', 'Докупки по неделям');
+      var wkOld = '<div class="chips scroll" role="group" aria-label="Закупы">' + tabsList().map(function (x) {
         return '<button type="button" class="chip tiny' + (x.week === W.week && x.kind === sel.kind ? ' on' : '') + '" data-act="shop-week" data-w="' + x.week + '" data-kind="' + x.kind + '">' + esc(x.label) + '</button>';
       }).join('') + '</div>';
       var shown = trips.filter(function (t) { return sel.store === 'all' || t.store === sel.store; });
