@@ -1765,6 +1765,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
   /* ---- общая база для сайта вне Claude (GitHub Pages): Supabase, таблица zk_state закрыта, доступ только через функции zk_get / zk_put с секретным кодом.
      Адрес и publishable-ключ публичны по замыслу; секретный код хранится только в localStorage устройства и в ссылке вида …/#key=КОД. ---- */
   var SB = { url: 'https://ooidwnxcobnffbbbzkcs.supabase.co', key: 'sb_publishable_pJSHT9gkR-LCKd5Tryii2A_OHloIz80' };
+  var DEFAULT_CODE = 'txnnfznpiq9wutpwq8seyv74';   // безопасность не требуется (данные только про еду): общий код зашит, устройства подключаются сами
   var CODE_KEY = 'zk-code', MT_KEY = 'zk-mt|', SYNCED_KEY = 'zk-synced';
   var cloud = null;   // { code } когда подключена общая база
   try {
@@ -1907,14 +1908,14 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     document.addEventListener('visibilitychange', function () { if (!document.hidden) pull(); });
   }
   Store.cloudConfigured = true;
-  Store.cloudCode = function () { return lsGet(CODE_KEY) || ''; };
-  Store.setCloudCode = function (code) { code = String(code || '').trim(); if (code && !/^[A-Za-z0-9_-]{16,64}$/.test(code)) return false; if (code) lsSet(CODE_KEY, code); else lsDel(CODE_KEY); lsDel(SYNCED_KEY); return true; };
+  Store.cloudCode = function () { var c = lsGet(CODE_KEY); return c === 'off' ? '' : (c || DEFAULT_CODE); };
+  Store.setCloudCode = function (code) { code = String(code || '').trim(); if (code && !/^[A-Za-z0-9_-]{16,64}$/.test(code)) return false; if (code) lsSet(CODE_KEY, code); else lsSet(CODE_KEY, 'off'); lsDel(SYNCED_KEY); return true; };
   Store.newCloudCode = function () { var a = new Uint8Array(18), s = ''; (window.crypto || window.msCrypto).getRandomValues(a); for (var i = 0; i < a.length; i++) s += 'abcdefghijkmnpqrstuvwxyz23456789'[a[i] % 32]; return s; };
 
   (function init() {
     var p;
     try { p = window.claude && window.claude.use ? window.claude.use('db') : null; } catch (e) { p = null; }
-    function noDb() { var code = lsGet(CODE_KEY); if (code && /^[A-Za-z0-9_-]{16,64}$/.test(code)) attachCloud(code); else finish(); }
+    function noDb() { var code = Store.cloudCode(); if (code && /^[A-Za-z0-9_-]{16,64}$/.test(code)) attachCloud(code); else finish(); }
     if (!p) { noDb(); return; }
     Promise.resolve(p).then(function (d) { if (d) attach(d); else noDb(); }, function () { noDb(); });
   })();
@@ -4099,13 +4100,12 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     if (Store.backend === 'cloud') {
       var st = Store.cloudOk === false ? 'нет связи с базой, данные сохраняются на устройстве и отправятся позже' : Store.cloudOk ? 'связь с базой есть' : 'подключаюсь…';
       return '<section class="card g8"><div style="font-size:15px;font-weight:800">Общая база подключена</div><div class="small">Отметки с этого устройства сохраняются в общую базу и появляются на других устройствах (обновление примерно раз в 20 секунд или при открытии). Сейчас: ' + esc(st) + '.</div>' +
-        '<div class="small">Чтобы подключить другое устройство, открой на нём эту ссылку (она содержит секретный код, никому её не показывай).</div>' +
-        Ui.btn('Скопировать ссылку для другого устройства', { primary: true, act: 'sync-code-copy' }) +
+        '<div class="small">Другие устройства подключаются сами: достаточно открыть этот сайт.</div>' +
         '<button type="button" class="textbtn" data-act="sync-code-off">Отключить общую базу на этом устройстве</button></section>';
     }
     return '<section class="card g8"><div style="font-size:15px;font-weight:800">Общая база: не подключена</div>' +
       '<div class="small">Если подключить общую базу, отметки с телефона и компьютера будут одинаковыми. На первом устройстве создай код, на остальных открой ссылку с кодом или впиши код сюда.</div>' +
-      Ui.btn('Создать код и подключить', { primary: true, act: 'sync-code-new' }) +
+      Ui.btn('Подключить общую базу', { primary: true, act: 'sync-code-set' }) +
       '<input class="inp" id="sync-code" maxlength="64" placeholder="Или впиши уже созданный код" aria-label="Код общей базы">' +
       Ui.btn('Подключить по коду', { act: 'sync-code-set' }) + '</section>';
   }
