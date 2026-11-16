@@ -1762,6 +1762,16 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
   var EMPTY = Object.freeze({});
   COLLS.forEach(function (c) { cache[c] = {}; });
 
+  /* ---- общая база для сайта вне Claude (GitHub Pages): Supabase, таблица zk_state закрыта, доступ только через функции zk_get / zk_put с секретным кодом.
+     Адрес и publishable-ключ публичны по замыслу; секретный код хранится только в localStorage устройства и в ссылке вида …/#key=КОД. ---- */
+  var SB = { url: 'https://ooidwnxcobnffbbbzkcs.supabase.co', key: 'sb_publishable_pJSHT9gkR-LCKd5Tryii2A_OHloIz80' };
+  var CODE_KEY = 'zk-code', MT_KEY = 'zk-mt|', SYNCED_KEY = 'zk-synced';
+  var cloud = null;   // { code } когда подключена общая база
+  try {
+    var hm = /^#key=([A-Za-z0-9_-]{16,64})$/.exec(location.hash || '');
+    if (hm) { localStorage.setItem(CODE_KEY, hm[1]); history.replaceState(null, '', location.pathname + location.search + '#today'); }
+  } catch (e) { }
+
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
   function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { } }
@@ -1812,7 +1822,8 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
 
   /* ---- запись в db: отложенная, по одному write на документ ---- */
   function remoteWrite(c, id, isDelete) {
-    if (!db) { if (!readyDone) dirty[key(c, id)] = isDelete ? "del" : "set"; return; }
+    if (!db && !cloud) { if (!readyDone) dirty[key(c, id)] = isDelete ? "del" : "set"; return; }
+    if (cloud) lsSet(MT_KEY + key(c, id), String(Date.now()));
     var k = key(c, id); dirty[k] = isDelete ? 'del' : 'set';
     if (writing[k] || timers[k]) return;
     timers[k] = setTimeout(function () { timers[k] = 0; flush(c, id); }, 250);
@@ -1821,9 +1832,12 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     var k = key(c, id), mode = dirty[k];
     if (!mode) return;
     dirty[k] = null; writing[k] = true;
-    var ref;
-    try { ref = db.doc(Store.path(c, id)); } catch (e) { writing[k] = false; return; }
-    var p = mode === 'del' ? ref.delete() : ref.set(clone(cache[c][id]) || {});
+    var ref, p;
+    if (cloud) { p = rpc('zk_put', { p_code: cloud.code, p_coll: c, p_id: id, p_data: mode === 'del' ? { __del: true } : (clone(cache[c][id]) || {}) }); }
+    else {
+      try { ref = db.doc(Store.path(c, id)); } catch (e) { writing[k] = false; return; }
+      p = mode === 'del' ? ref.delete() : ref.set(clone(cache[c][id]) || {});
+    }
     p.then(function () { Store.writeError = false; }, function (e) {
       if (!Store.writeError) { Store.writeError = true; if (window.App && App.toast) App.toast('Сохранено на этом устройстве, но в общую базу не записалось'); }
       console.warn('db write failed', k, e && e.code);
@@ -1860,11 +1874,49 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     });
   }
 
+  /* ---- Supabase: вызов функции, подтягивание чужих правок, первая отправка локальных данных ---- */
+  function rpc(fn, body) {
+    return fetch(SB.url + '/rest/v1/rpc/' + fn, { method: 'POST', headers: { apikey: SB.key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 ? null : r.json(); });
+  }
+  function pull() {
+    return rpc('zk_get', { p_code: cloud.code }).then(function (rows) {
+      Store.cloudOk = true; Store.cloudAt = Date.now();
+      (rows || []).forEach(function (row) {
+        var c = row.coll, id = row.id, k = key(c, id);
+        if (COLLS.indexOf(c) < 0 || dirty[k] || writing[k] || timers[k]) return;
+        var ts = Date.parse(row.updated_at) || 0, mt = +lsGet(MT_KEY + k) || 0;
+        if (cache[c][id] && mt > ts) return;                                  // локальная правка новее — отправится сама
+        if (row.data && row.data.__del) { if (cache[c][id]) { delete cache[c][id]; lsDel(LS + k); notify(c, id); } lsSet(MT_KEY + k, String(ts)); return; }
+        if (JSON.stringify(row.data) !== JSON.stringify(cache[c][id])) { cache[c][id] = row.data; lsSet(LS + k, JSON.stringify(row.data)); notify(c, id); }
+        lsSet(MT_KEY + k, String(ts));
+      });
+    }, function (e) { Store.cloudOk = false; console.warn('cloud pull failed', e && e.message); });
+  }
+  function attachCloud(code) {
+    cloud = { code: code }; Store.backend = 'cloud'; Store.cloudOk = null;
+    var first = lsGet(SYNCED_KEY) !== code, pre = Promise.resolve();
+    if (first) {   // первое подключение этого устройства: сначала отправляем всё, что накоплено здесь
+      var jobs = [];
+      COLLS.forEach(function (c) { Object.keys(cache[c] || {}).forEach(function (id) { jobs.push(rpc('zk_put', { p_code: code, p_coll: c, p_id: id, p_data: clone(cache[c][id]) || {} }).then(function () { lsSet(MT_KEY + key(c, id), String(Date.now())); })); }); });
+      pre = Promise.all(jobs).then(function () { lsSet(SYNCED_KEY, code); }, function (e) { console.warn('cloud initial push failed', e && e.message); });
+    }
+    pre.then(pull).then(function () { finish(); });
+    Object.keys(dirty).forEach(function (k) { if (dirty[k]) { var p = k.indexOf('/'); remoteWrite(k.slice(0, p), k.slice(p + 1), dirty[k] === 'del'); } });
+    setInterval(function () { if (!document.hidden) pull(); }, 20000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) pull(); });
+  }
+  Store.cloudConfigured = true;
+  Store.cloudCode = function () { return lsGet(CODE_KEY) || ''; };
+  Store.setCloudCode = function (code) { code = String(code || '').trim(); if (code && !/^[A-Za-z0-9_-]{16,64}$/.test(code)) return false; if (code) lsSet(CODE_KEY, code); else lsDel(CODE_KEY); lsDel(SYNCED_KEY); return true; };
+  Store.newCloudCode = function () { var a = new Uint8Array(18), s = ''; (window.crypto || window.msCrypto).getRandomValues(a); for (var i = 0; i < a.length; i++) s += 'abcdefghijkmnpqrstuvwxyz23456789'[a[i] % 32]; return s; };
+
   (function init() {
     var p;
     try { p = window.claude && window.claude.use ? window.claude.use('db') : null; } catch (e) { p = null; }
-    if (!p) { finish(); return; }
-    Promise.resolve(p).then(function (d) { if (d) attach(d); else finish(); }, function () { finish(); });
+    function noDb() { var code = lsGet(CODE_KEY); if (code && /^[A-Za-z0-9_-]{16,64}$/.test(code)) attachCloud(code); else finish(); }
+    if (!p) { noDb(); return; }
+    Promise.resolve(p).then(function (d) { if (d) attach(d); else noDb(); }, function () { noDb(); });
   })();
 
   /* «С нуля»: стирает все отметки (куплено, съедено, оценки, звёзды, заметки, цены, свои даты). Выдаётся один раз на старте жизни по рациону (LAUNCH). */
@@ -4031,12 +4083,39 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
     App.toast(msg); App.rerender();
   });
 
+  /* общая база (Supabase): код подключения */
+  function keyLink() { return location.origin + location.pathname + '#key=' + Store.cloudCode(); }
+  App.on('sync-code-new', function () { Store.setCloudCode(Store.newCloudCode()); location.reload(); });
+  App.on('sync-code-set', function () {
+    var i = document.getElementById('sync-code'), v = i ? String(i.value || '').trim() : '';
+    if (!Store.setCloudCode(v)) { App.toast('Код: 16–64 символов, только латиница, цифры, - и _'); return; }
+    location.reload();
+  });
+  App.on('sync-code-off', function () { Store.setCloudCode(''); location.reload(); });
+  App.on('sync-code-copy', function () { Shopping.copy(keyLink()).then(function (ok) { App.toast(ok ? 'Ссылка скопирована. Открой её на другом устройстве.' : 'Не удалось скопировать'); }); });
+
+  function cloudCard() {
+    if (!Store.cloudConfigured || Store.backend === 'db') return '';
+    if (Store.backend === 'cloud') {
+      var st = Store.cloudOk === false ? 'нет связи с базой, данные сохраняются на устройстве и отправятся позже' : Store.cloudOk ? 'связь с базой есть' : 'подключаюсь…';
+      return '<section class="card g8"><div style="font-size:15px;font-weight:800">Общая база подключена</div><div class="small">Отметки с этого устройства сохраняются в общую базу и появляются на других устройствах (обновление примерно раз в 20 секунд или при открытии). Сейчас: ' + esc(st) + '.</div>' +
+        '<div class="small">Чтобы подключить другое устройство, открой на нём эту ссылку (она содержит секретный код, никому её не показывай).</div>' +
+        Ui.btn('Скопировать ссылку для другого устройства', { primary: true, act: 'sync-code-copy' }) +
+        '<button type="button" class="textbtn" data-act="sync-code-off">Отключить общую базу на этом устройстве</button></section>';
+    }
+    return '<section class="card g8"><div style="font-size:15px;font-weight:800">Общая база: не подключена</div>' +
+      '<div class="small">Если подключить общую базу, отметки с телефона и компьютера будут одинаковыми. На первом устройстве создай код, на остальных открой ссылку с кодом или впиши код сюда.</div>' +
+      Ui.btn('Создать код и подключить', { primary: true, act: 'sync-code-new' }) +
+      '<input class="inp" id="sync-code" maxlength="64" placeholder="Или впиши уже созданный код" aria-label="Код общей базы">' +
+      Ui.btn('Подключить по коду', { act: 'sync-code-set' }) + '</section>';
+  }
+
   App.screen('sync', {
-    tab: null, title: 'Перенос данных',
+    tab: null, title: 'Общая база и перенос',
     render: function () {
-      var shared = Store.backend === 'db', p = pack();
+      var shared = Store.backend === 'db' || Store.backend === 'cloud', p = pack();
       return '<main class="screen">' + Ui.backRow('Ещё', '#more') +
-        '<div class="col g2"><h1 class="h-greet">Перенос данных</h1><div class="cap bold" style="font-size:13px;font-weight:700">' + (shared ? 'Здесь данные уже общие: телефон и компьютер видят одно и то же.' : 'Здесь данные хранятся только на этом устройстве.') + '</div></div>' +
+        '<div class="col g2"><h1 class="h-greet">Общая база и перенос</h1><div class="cap bold" style="font-size:13px;font-weight:700">' + (shared ? 'Здесь данные общие: телефон и компьютер видят одно и то же.' : 'Здесь данные хранятся только на этом устройстве.') + '</div></div>' + cloudCard() +
         (shared ? '' : '<section class="card g6"><div class="small">Чтобы то, что ты отметила на телефоне, появилось на компьютере: нажми «Скопировать мои данные» на телефоне, пришли код себе (заметки, мессенджер) и вставь его на компьютере в поле «Загрузить».</div></section>') +
         '<section class="card g8"><div style="font-size:15px;font-weight:800">Мои данные · ' + p.n + ' записей</div>' +
         Ui.btn('Скопировать мои данные', { primary: true, act: 'sync-copy' }) +
@@ -4854,7 +4933,7 @@ textarea.inp,input.inp{width:100%;background:var(--bg);border:1.5px solid var(--
         menuRow('#budget', Ui.art('piggyM', 26, 19.5, ''), 'Бюджет', 'план и факт по неделям') +
         menuRow('#ratings', Ui.art('starM', 26, 22.75, ''), 'Оценки блюд', ratCap) +
         menuRow('#notes', Ui.art('noteM', 26, 19.5, ''), 'Заметки', 'о блюдах и о неудобствах сайта') +
-        menuRow('#sync', Ui.icon('box', 21), 'Перенос данных', 'телефон и компьютер, код с отметками') +
+        menuRow('#sync', Ui.icon('box', 21), 'Общая база и перенос', 'телефон и компьютер, одни и те же отметки') +
         menuRow('#norms', Ui.art('alarmM', 18, 13.5, ''), 'Нормы и расчёт', 'калории, белок, как считаем') +
         '</section>' +
         '<section class="card tip" style="gap:8px"><div class="row g8">' + Ui.icon('moon', 21) + '<span style="font-size:14px;font-weight:800">Попросить Claude</span></div>' +
